@@ -21,6 +21,8 @@
 #include <time.h>
 
 #include <darknet/image.h>
+#include <darknet/region_layer.h>
+#include <darknet/option_list.h>
 #include "MultiClassObjectDetector.h"
 
 #include "dn_object_detect/DetectedObjects.h"
@@ -35,15 +37,15 @@ static const string kDefaultDevice = "/wide_stereo/right/image_rect_color";
 static const string kYOLOModel = "data/yolo.weights";
 static const string kYOLOConfig = "data/yolo.cfg";
 
-static const char * VoClassNames[] = { "aeroplane", "bicycle", "bird", // should not hard code these name
-                              "boat", "bottle", "bus", "car",
-                              "cat", "chair", "cow", "diningtable",
-                              "dog", "horse", "motorbike",
-                              "person", "pottedplant", "sheep",
-                              "sofa", "train", "tvmonitor"
-                            };
+//static const char * VoClassNames[] = { "aeroplane", "bicycle", "bird", // should not hard code these name
+//                              "boat", "bottle", "bus", "car",
+//                              "cat", "chair", "cow", "diningtable",
+//                              "dog", "horse", "motorbike",
+//                              "person", "pottedplant", "sheep",
+//                              "sofa", "train", "tvmonitor"
+//                            };
 
-static int NofVoClasses = sizeof( VoClassNames ) / sizeof( VoClassNames[0] );
+//static int NofVoClasses = sizeof( VoClassNames ) / sizeof( VoClassNames[0] );
 
 /*
 extern "C" {
@@ -82,23 +84,31 @@ void MultiClassObjectDetector::init()
   NodeHandle priNh( "~" );
   std::string yoloModelFile;
   std::string yoloConfigFile;
+  std::string yoloDataConfigFile;
   
   priNh.param<std::string>( "camera", cameraDevice_, kDefaultDevice );
   priNh.param<std::string>( "yolo_model", yoloModelFile, kYOLOModel );
   priNh.param<std::string>( "yolo_config", yoloConfigFile, kYOLOConfig );
+  priNh.param<std::string>( "yolo_data_config", yoloDataConfigFile, "data/coco.data");
   priNh.param( "threshold", threshold_, 0.2f );
   
   const boost::filesystem::path modelFilePath = yoloModelFile;
   const boost::filesystem::path configFilepath = yoloConfigFile;
+  const boost::filesystem::path dataConfigFilepath = yoloDataConfigFile;
   
-  if (boost::filesystem::exists( modelFilePath ) && boost::filesystem::exists( configFilepath )) {
+  if (boost::filesystem::exists( modelFilePath ) && boost::filesystem::exists( configFilepath ) && boost::filesystem::exists( dataConfigFilepath ) ){
     darkNet_ = parse_network_cfg( (char*)yoloConfigFile.c_str() );
     load_weights( darkNet_, (char*)yoloModelFile.c_str() );
     detectLayer_ = darkNet_->layers[darkNet_->n-1];
-    printf( "detect layer side = %d n = %d\n", detectLayer_.side, detectLayer_.n );
-    maxNofBoxes_ = detectLayer_.side * detectLayer_.side * detectLayer_.n;
+    printf( "detect layer w = %d h = %d n = %d\n", detectLayer_.w, detectLayer_.h, detectLayer_.n );
+    maxNofBoxes_ = detectLayer_.w * detectLayer_.h * detectLayer_.n;
     set_batch_network( darkNet_, 1 );
     srand(2222222);
+    std::cout << yoloDataConfigFile << std::endl;
+    ::list *options = read_data_cfg((char*)(yoloDataConfigFile.c_str()));
+    num_classes_ = option_find_int(options, "classes", 20);
+    char *name_list = option_find_str(options, "names", "data/names.list");
+    class_names_ = get_labels(name_list);
   }
   else {
     ROS_ERROR( "Unable to find YOLO darknet configuration or model files." );
@@ -186,8 +196,11 @@ void MultiClassObjectDetector::doObjectDetection()
       float *X = sized.data;
       float *predictions = network_predict( darkNet_, X );
       //printf("%s: Predicted in %f seconds.\n", input, sec(clock()-time));
-      convert_yolo_detections( predictions, detectLayer_.classes, detectLayer_.n, detectLayer_.sqrt,
-          detectLayer_.side, 1, 1, threshold_, probs, boxes, 0);
+      //void get_region_boxes(layer l, int w, int h, float thresh, float **probs, box *boxes, int only_objectness, int *map, float tree_thresh)
+      get_region_boxes(detectLayer_, 1, 1, threshold_, probs, boxes, 0, 0, 0);
+
+      //convert_yolo_detections( predictions, detectLayer_.classes, detectLayer_.n, detectLayer_.sqrt,
+      //    detectLayer_.side, 1, 1, threshold_, probs, boxes, 0);
       if (nms) {
         do_nms_sort( boxes, probs, maxNofBoxes_,
             detectLayer_.classes, nms );
@@ -333,13 +346,13 @@ void MultiClassObjectDetector::consolidateDetectedObjects( const image * im, box
   objList.clear();
 
   for(int i = 0; i < maxNofBoxes_; ++i){
-    objclass = max_index( probs[i], NofVoClasses );
+    objclass = max_index( probs[i], num_classes_ );
     prob = probs[i][objclass];
 
     if (prob > threshold_) {
       int width = pow( prob, 0.5 ) * 10 + 1;
       dn_object_detect::ObjectInfo newObj;
-      newObj.type = VoClassNames[objclass];
+      newObj.type = class_names_[objclass];
       newObj.prob = prob;
 
       //printf("%s: %.2f\n", VoClassNames[objclass], prob);

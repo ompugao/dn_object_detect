@@ -77,6 +77,9 @@ private:
   detection_layer detectLayer_;
   int maxNofBoxes_;
 
+  char **class_names_;
+  int num_classes_;
+
   void processingRawImages( const sensor_msgs::ImageConstPtr& msg );
 
   void startDetection();
